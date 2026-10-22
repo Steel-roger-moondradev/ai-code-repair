@@ -18,6 +18,7 @@ from app.main import app
 from app.schemas.github import IssueData
 from app.schemas.workflow import WorkflowStatus, transition_status
 from app.services.github import GitHubClient, GitHubServiceError
+from app.services.llm import LLMResponse
 from app.schemas.sandbox import SandboxResult
 
 
@@ -54,6 +55,13 @@ class FakeLLM:
 
         self.calls += 1
         if self.calls > 1:
+            if self.calls > 2:
+                return LLMResponse(
+                    text='{"verdict":"approved","correctness_concerns":[],"security_concerns":[],'
+                    '"maintainability_notes":[],"test_coverage_notes":[],"evidence":["exit code 0"],'
+                    '"summary":"Reviewed"}',
+                    usage={},
+                )
             return LLMResponse(
                 text='{"summary":"Fix","assumptions":[],"risks":[],"tests_to_add":[],"changes":['
                 '{"path":"main.py","operation":"modify","rationale":"Fix","original_content":"old\\n",'
@@ -99,6 +107,47 @@ class FakeSandboxService:
             test_summary="1 passed",
             error=None,
         )
+
+
+class RepairLLM(FakeLLM):
+    def __init__(self, verdicts):
+        super().__init__()
+        self.verdicts = iter(verdicts)
+
+    async def complete(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                text='{"summary":"Fix it","problem_type":"bug","expected_behavior":"Work",'
+                '"acceptance_criteria":["Works"],"constraints":[],"keywords":["Fix"],'
+                '"confidence":0.9,"needs_clarification":false}',
+                usage={},
+            )
+        if self.calls % 2 == 0:
+            return LLMResponse(
+                text='{"summary":"Fix","assumptions":[],"risks":[],"tests_to_add":[],"changes":['
+                '{"path":"main.py","operation":"modify","rationale":"Fix","original_content":"old\\n",'
+                '"updated_content":"new\\n"}]}',
+                usage={},
+            )
+        verdict = next(self.verdicts)
+        return LLMResponse(
+            text='{"verdict":"'
+            + verdict
+            + '","correctness_concerns":[],"security_concerns":[],'
+            '"maintainability_notes":[],"test_coverage_notes":[],"evidence":["exit code 0"],'
+            '"summary":"Reviewed"}',
+            usage={},
+        )
+
+
+class CountingSandboxService(FakeSandboxService):
+    def __init__(self):
+        self.calls = 0
+
+    def execute(self, repository_path, proposal):
+        self.calls += 1
+        return super().execute(repository_path, proposal)
 
 
 @pytest.mark.asyncio
@@ -160,7 +209,7 @@ def test_workflow_endpoint_returns_stable_success_shape(tmp_path) -> None:
     assert payload["diff"]["additions"] == 1
     assert payload["diff"]["deletions"] == 1
     assert payload["sandbox_result"]["status"] == "passed"
-    assert payload["review"] is None
+    assert payload["review"]["verdict"] == "approved"
     assert payload["errors"] == []
 
 
@@ -181,3 +230,52 @@ def test_graph_compilation_does_not_make_network_calls() -> None:
             pytest.fail("network must not be called during graph compilation")
 
     build_issue_workflow(ExplodingClient())
+
+
+@pytest.mark.asyncio
+async def test_repair_is_revalidated_and_retested_once(tmp_path) -> None:
+    repository = tmp_path / "octo" / "repo"
+    repository.mkdir(parents=True)
+    (repository / "main.py").write_text("old\n", encoding="utf-8")
+    sandbox = CountingSandboxService()
+    llm = RepairLLM(["needs_changes", "approved"])
+    graph = build_issue_workflow(
+        FakeGitHubClient(),
+        llm=llm,
+        tool_registry=FakeToolRegistry(),
+        settings=Settings(repository_root=str(tmp_path), max_repair_attempts=1),
+        sandbox_service=sandbox,
+    )
+
+    result = await graph.ainvoke(
+        initial_state(owner="octo", repo="repo", issue_number=42, workflow_id="repair")
+    )
+
+    assert result["status"] == WorkflowStatus.PATCH_READY
+    assert result["repair_attempts"] == 1
+    assert llm.calls == 5
+    assert sandbox.calls == 2
+    assert result["review"].verdict == "approved"
+
+
+@pytest.mark.asyncio
+async def test_repair_limit_stops_for_human_review(tmp_path) -> None:
+    repository = tmp_path / "octo" / "repo"
+    repository.mkdir(parents=True)
+    (repository / "main.py").write_text("old\n", encoding="utf-8")
+    sandbox = CountingSandboxService()
+    graph = build_issue_workflow(
+        FakeGitHubClient(),
+        llm=RepairLLM(["needs_changes", "needs_changes"]),
+        tool_registry=FakeToolRegistry(),
+        settings=Settings(repository_root=str(tmp_path), max_repair_attempts=1),
+        sandbox_service=sandbox,
+    )
+
+    result = await graph.ainvoke(
+        initial_state(owner="octo", repo="repo", issue_number=42, workflow_id="limit")
+    )
+
+    assert result["status"] == WorkflowStatus.NEEDS_HUMAN_REVIEW
+    assert result["repair_attempts"] == 1
+    assert sandbox.calls == 2

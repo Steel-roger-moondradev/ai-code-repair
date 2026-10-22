@@ -119,7 +119,12 @@ def _validate_path(path: str, errors: list[str]) -> str | None:
     ):
         errors.append(f"invalid Python path: {path!r}")
         return None
-    if any(part in PROTECTED_DIRECTORIES for part in pure.parts) or pure.name in PROTECTED_NAMES:
+    if (
+        any(part in PROTECTED_DIRECTORIES for part in pure.parts)
+        or pure.name in PROTECTED_NAMES
+        or pure.name.startswith("test_")
+        or pure.name.endswith("_test.py")
+    ):
         errors.append(f"protected path: {path}")
         return None
     return pure.as_posix()

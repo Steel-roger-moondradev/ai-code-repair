@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.github import get_github_client
 from app.agents.issue_workflow import build_issue_workflow, initial_state
 from app.config import Settings, get_settings
-from app.schemas.workflow import WorkflowRequest, WorkflowResponse
+from app.schemas.workflow import WorkflowRequest, WorkflowResponse, WorkflowStatus
 from app.services.github import GitHubClient
 from app.services.github import parse_issue_url
 from app.services.llm import GroqLLMAdapter
 from app.services.sandbox import SandboxService
+from app.services.persistence import PersistenceError, PersistenceService
 from app.tools.registry import ToolRegistry, build_repository_tool_registry
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
@@ -37,6 +38,12 @@ def get_sandbox_service(settings: Settings = Depends(get_settings)) -> SandboxSe
     return SandboxService(settings)
 
 
+def get_persistence_service(settings: Settings = Depends(get_settings)) -> PersistenceService:
+    """Create a request-scoped persistence service."""
+
+    return PersistenceService(settings)
+
+
 @router.post("/issue-analysis", response_model=WorkflowResponse)
 async def issue_analysis(
     request: WorkflowRequest,
@@ -45,6 +52,7 @@ async def issue_analysis(
     tool_registry: ToolRegistry = Depends(get_repository_tool_registry),
     settings: Settings = Depends(get_settings),
     sandbox_service: SandboxService = Depends(get_sandbox_service),
+    persistence: PersistenceService = Depends(get_persistence_service),
 ) -> WorkflowResponse:
     """Analyze an issue, validate a patch, and test it in an isolated sandbox."""
 
@@ -54,6 +62,8 @@ async def issue_analysis(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     workflow_id = str(uuid4())
+    persistence.create_run(workflow_id, reference.owner, reference.repo, reference.issue_number)
+    persistence.update_status(workflow_id, WorkflowStatus.RUNNING, stage="fetch_issue")
     state = initial_state(
         owner=reference.owner,
         repo=reference.repo,
@@ -68,6 +78,33 @@ async def issue_analysis(
         sandbox_service=sandbox_service,
     )
     result = await graph.ainvoke(state)
+    final_status = result["status"]
+    if final_status in {WorkflowStatus.NEEDS_HUMAN_REVIEW, WorkflowStatus.REJECTED}:
+        persistence.update_status(
+            workflow_id,
+            WorkflowStatus.PATCH_READY,
+            patch_hash=result.get("validation").patch_hash
+            if result.get("validation")
+            else None,
+            stage="patch_ready",
+        )
+    persistence.update_status(
+        workflow_id,
+        final_status,
+        patch_hash=result.get("validation").patch_hash if result.get("validation") else None,
+        stage="workflow_complete",
+    )
+    for artifact_type in ("proposal", "diff", "sandbox_result", "review"):
+        artifact = result.get(artifact_type)
+        if artifact is not None:
+            persistence.save_artifact(
+                workflow_id,
+                artifact_type,
+                artifact,
+                patch_hash=result.get("validation").patch_hash
+                if result.get("validation")
+                else None,
+            )
     return WorkflowResponse(
         workflow_id=workflow_id,
         status=result["status"],
@@ -81,3 +118,69 @@ async def issue_analysis(
         review=result.get("review"),
         errors=result.get("errors", []),
     )
+
+
+@router.get("/{workflow_id}/proposal")
+def get_workflow_proposal(
+    workflow_id: str,
+    persistence: PersistenceService = Depends(get_persistence_service),
+) -> dict:
+    return _get_artifact_response(workflow_id, "proposal", persistence)
+
+
+@router.get("/{workflow_id}/results")
+def get_workflow_results(
+    workflow_id: str,
+    persistence: PersistenceService = Depends(get_persistence_service),
+) -> dict:
+    try:
+        run = persistence.get_run(workflow_id)
+    except PersistenceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "workflow_id": workflow_id,
+        "status": run["status"],
+        "artifacts": [
+            artifact
+            for artifact in run["artifacts"]
+            if artifact["type"] in {"diff", "sandbox_result", "review"}
+        ],
+    }
+
+
+@router.get("/{workflow_id}")
+def get_workflow(
+    workflow_id: str,
+    persistence: PersistenceService = Depends(get_persistence_service),
+) -> dict:
+    try:
+        return persistence.get_run(workflow_id)
+    except PersistenceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("")
+def list_workflows(
+    page: int = 1,
+    page_size: int = 20,
+    persistence: PersistenceService = Depends(get_persistence_service),
+) -> dict:
+    try:
+        return persistence.list_runs(page=page, page_size=page_size)
+    except PersistenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _get_artifact_response(
+    workflow_id: str,
+    artifact_type: str,
+    persistence: PersistenceService,
+) -> dict:
+    try:
+        run = persistence.get_run(workflow_id)
+    except PersistenceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    for artifact in reversed(run["artifacts"]):
+        if artifact["type"] == artifact_type:
+            return {"workflow_id": workflow_id, "artifact": artifact}
+    raise HTTPException(status_code=404, detail=f"{artifact_type} artifact not found")

@@ -45,6 +45,23 @@ python -m pytest backend/tests -v
 The automated tests are offline and use fakes for GitHub, Groq, Docker, and
 repository operations.
 
+## Workflow history
+
+Workflow runs and bounded artifacts are stored in the configured SQLite
+database. Apply the tracked schema migration with:
+
+```powershell
+$env:PYTHONPATH = "backend"
+python -m alembic upgrade head
+```
+
+History endpoints:
+
+- `GET /api/v1/workflows`
+- `GET /api/v1/workflows/{workflow_id}`
+- `GET /api/v1/workflows/{workflow_id}/proposal`
+- `GET /api/v1/workflows/{workflow_id}/results`
+
 ## Sandbox image
 
 Build the restricted test image from the repository root:

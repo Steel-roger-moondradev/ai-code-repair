@@ -10,6 +10,7 @@ from app.agents.state import PatchPilotState
 from app.agents.issue_analyst import issue_analyst_node
 from app.agents.repository_explorer import repository_explorer_node
 from app.agents.patch_node import patch_node
+from app.agents.reviewer import reviewer_node
 from app.config import Settings
 from app.schemas.patch import PatchProposal
 from app.schemas.workflow import WorkflowStatus, transition_status
@@ -115,13 +116,16 @@ def build_issue_workflow(
                     ),
                     "errors": validation.errors,
                 }
+            current_status = state.get("status", WorkflowStatus.RUNNING)
+            next_status = (
+                transition_status(current_status, WorkflowStatus.PATCH_READY)
+                if current_status == WorkflowStatus.RUNNING
+                else current_status
+            )
             return {
                 "validation": validation,
                 "diff": generate_diff(repository_path, proposal),
-                "status": transition_status(
-                    state.get("status", WorkflowStatus.RUNNING),
-                    WorkflowStatus.PATCH_READY,
-                ),
+                "status": next_status,
             }
 
         graph.add_node("issue_analyst", analyze_node)
@@ -167,9 +171,44 @@ def build_issue_workflow(
                 }
             return {"sandbox_result": result}
 
+        async def review_node(state: PatchPilotState) -> PatchPilotState:
+            return await reviewer_node(state, llm)
+
+        async def increment_repair_node(state: PatchPilotState) -> PatchPilotState:
+            return {"repair_attempts": state.get("repair_attempts", 0) + 1}
+
+        def route_sandbox(state: PatchPilotState) -> str:
+            return "reviewer" if state.get("sandbox_result") is not None and (
+                state["sandbox_result"].status == "passed"
+            ) else END
+
+        def route_review(state: PatchPilotState) -> str:
+            review = state.get("review")
+            if review is None:
+                return END
+            if review.verdict == "needs_changes":
+                max_attempts = (settings or Settings()).max_repair_attempts
+                if state.get("repair_attempts", 0) < max_attempts:
+                    return "increment_repair"
+                return "human_review"
+            if review.verdict == "needs_human_review":
+                return "human_review"
+            return END
+
+        def route_human_review(state: PatchPilotState) -> str:
+            return END
+
         graph.add_node("validate_and_diff", validate_and_diff_node)
         if sandbox_service is not None:
             graph.add_node("sandbox", sandbox_node)
+            graph.add_node("reviewer", review_node)
+            graph.add_node("increment_repair", increment_repair_node)
+            graph.add_node("human_review", lambda state: {
+                "status": transition_status(
+                    state.get("status", WorkflowStatus.PATCH_READY),
+                    WorkflowStatus.NEEDS_HUMAN_REVIEW,
+                )
+            })
         graph.add_edge(START, "fetch_issue")
         graph.add_edge("fetch_issue", "issue_analyst")
         graph.add_edge("issue_analyst", "repository_explorer")
@@ -177,7 +216,17 @@ def build_issue_workflow(
         graph.add_edge("patch_node", "validate_and_diff")
         if sandbox_service is not None:
             graph.add_edge("validate_and_diff", "sandbox")
-            graph.add_edge("sandbox", END)
+            graph.add_conditional_edges("sandbox", route_sandbox, {
+                "reviewer": "reviewer",
+                END: END,
+            })
+            graph.add_conditional_edges("reviewer", route_review, {
+                "increment_repair": "increment_repair",
+                "human_review": "human_review",
+                END: END,
+            })
+            graph.add_edge("increment_repair", "patch_node")
+            graph.add_edge("human_review", END)
         else:
             graph.add_edge("validate_and_diff", END)
     return graph.compile()
