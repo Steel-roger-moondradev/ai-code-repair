@@ -2,6 +2,7 @@
 
 from typing import TypedDict
 
+from app.schemas.analysis import IssueAnalysis
 from app.schemas.github import IssueData
 from app.schemas.workflow import WorkflowStatus
 
@@ -13,7 +14,7 @@ class PatchPilotState(TypedDict, total=False):
     repo: str
     issue_number: int
     issue: IssueData | None
-    analysis: dict | None
+    analysis: IssueAnalysis | None
     repository_tree: list[str]
     search_results: list[dict]
     relevant_files: list[dict]

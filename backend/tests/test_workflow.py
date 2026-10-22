@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.github import get_github_client
+from app.api.workflows import get_llm_adapter, get_repository_tool_registry
 from app.agents.issue_workflow import build_issue_workflow, initial_state
 from app.main import app
 from app.schemas.github import IssueData
@@ -36,6 +37,27 @@ class FakeGitHubClient:
 class FailingGitHubClient:
     async def get_issue(self, owner: str, repo: str, issue_number: int) -> IssueData:
         raise GitHubServiceError("not_found", "GitHub resource was not found", 404)
+
+
+class FakeLLM:
+    async def complete(self, **kwargs):
+        from app.services.llm import LLMResponse
+
+        return LLMResponse(
+            text='{"summary":"Fix it","problem_type":"bug","expected_behavior":"Work",'
+            '"acceptance_criteria":["Works"],"constraints":[],"keywords":["Fix"],'
+            '"confidence":0.9,"needs_clarification":false}',
+            usage={},
+        )
+
+
+class FakeToolRegistry:
+    def execute(self, name, arguments, *, workflow_id="unknown"):
+        from app.tools.registry import ToolResult
+
+        if name == "get_repository_tree":
+            return ToolResult(ok=True, result=[])
+        return ToolResult(ok=True, result=[])
 
 
 @pytest.mark.asyncio
@@ -71,6 +93,8 @@ def test_workflow_endpoint_returns_stable_success_shape() -> None:
         yield FakeGitHubClient()
 
     app.dependency_overrides[get_github_client] = fake_client
+    app.dependency_overrides[get_llm_adapter] = lambda: FakeLLM()
+    app.dependency_overrides[get_repository_tool_registry] = lambda: FakeToolRegistry()
     try:
         with TestClient(app) as client:
             response = client.post(
