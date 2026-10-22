@@ -5,6 +5,36 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.services.repository import RepositoryService
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class GetRepositoryTreeArguments(BaseModel):
+    """Arguments for listing a repository tree."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository_path: Path
+
+
+class SearchRepositoryCodeArguments(BaseModel):
+    """Arguments for exact repository search."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository_path: Path
+    query: str = Field(min_length=1, max_length=4000)
+    max_results: int = Field(default=100, gt=0, le=100)
+
+
+class ReadRepositoryFileArguments(BaseModel):
+    """Arguments for bounded repository file reads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository_path: Path
+    relative_path: str = Field(min_length=1)
+    start_line: int | None = Field(default=None, gt=0)
+    end_line: int | None = Field(default=None, gt=0)
 
 
 def get_repository_tree(
