@@ -61,6 +61,18 @@ History endpoints:
 - `GET /api/v1/workflows/{workflow_id}`
 - `GET /api/v1/workflows/{workflow_id}/proposal`
 - `GET /api/v1/workflows/{workflow_id}/results`
+- `POST /api/v1/workflows/{workflow_id}/approve`
+
+Approval requires the exact current `expected_patch_hash` from the persisted
+validated proposal. The server creates a workflow-derived branch and publishes
+only validated Python changes; it never writes directly to the default branch.
+
+Workflow creation uses `POST /api/v1/workflows` and accepts an optional
+`idempotency_key`. Repeating a request with the same key returns the original
+workflow ID without executing a second workflow. The legacy
+`POST /api/v1/workflows/issue-analysis` path maps to the same handler.
+Requests include an `X-Request-ID` response header; callers may provide their
+own request ID using the same header.
 
 ## Sandbox image
 

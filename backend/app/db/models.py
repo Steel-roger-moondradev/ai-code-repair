@@ -22,6 +22,9 @@ class WorkflowRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     patch_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, unique=True
+    )
 
 
 class WorkflowArtifact(Base):

@@ -35,6 +35,7 @@ _ALLOWED_TRANSITIONS: dict[WorkflowStatus, frozenset[WorkflowStatus]] = {
             WorkflowStatus.NEEDS_HUMAN_REVIEW,
             WorkflowStatus.FAILED,
             WorkflowStatus.REJECTED,
+            WorkflowStatus.APPROVED,
         }
     ),
     WorkflowStatus.TESTING: frozenset({WorkflowStatus.PATCH_READY, WorkflowStatus.FAILED}),
@@ -59,7 +60,8 @@ class WorkflowRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    issue_url: str = Field(min_length=1)
+    issue_url: str = Field(min_length=1, max_length=2048)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class WorkflowResponse(BaseModel):
@@ -68,6 +70,7 @@ class WorkflowResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workflow_id: str
+    request_id: str | None = None
     status: WorkflowStatus
     issue: IssueData | None = None
     analysis: IssueAnalysis | None = None

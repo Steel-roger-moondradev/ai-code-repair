@@ -17,7 +17,7 @@ from app.db.models import AuditEvent, Base, WorkflowArtifact, WorkflowRun
 from app.schemas.workflow import WorkflowStatus, transition_status
 
 SECRET_KEY = re.compile(r"(token|secret|password|api[_-]?key|authorization)", re.I)
-ALLOWED_ARTIFACTS = {"proposal", "diff", "sandbox_result", "review"}
+ALLOWED_ARTIFACTS = {"proposal", "diff", "validation", "sandbox_result", "review", "pull_request"}
 
 
 class PersistenceError(RuntimeError):
@@ -45,7 +45,19 @@ class PersistenceService:
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False)
         Base.metadata.create_all(self.engine)
 
-    def create_run(self, workflow_id: str, owner: str, repo: str, issue_number: int) -> dict[str, Any]:
+    def create_run(
+        self,
+        workflow_id: str,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        if idempotency_key:
+            existing = self.find_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                return existing
         now = _now()
         run = WorkflowRun(
             id=workflow_id,
@@ -55,6 +67,7 @@ class PersistenceService:
             status=WorkflowStatus.QUEUED.value,
             created_at=now,
             updated_at=now,
+            idempotency_key=idempotency_key,
         )
         try:
             with self.session_factory.begin() as session:
@@ -70,6 +83,17 @@ class PersistenceService:
         except SQLAlchemyError as exc:
             raise PersistenceError("workflow creation failed") from exc
         return self.get_run(workflow_id)
+
+    def find_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            run = session.scalar(
+                select(WorkflowRun).where(
+                    WorkflowRun.idempotency_key == idempotency_key
+                )
+            )
+            if run is None:
+                return None
+            return _run_payload(run, [], [])
 
     def update_status(
         self,
@@ -226,6 +250,7 @@ def _run_payload(
         "created_at": run.created_at.isoformat() + "Z",
         "updated_at": run.updated_at.isoformat() + "Z",
         "patch_hash": run.patch_hash,
+        "idempotency_key": run.idempotency_key,
         "artifacts": [
             {
                 "type": item.artifact_type,
