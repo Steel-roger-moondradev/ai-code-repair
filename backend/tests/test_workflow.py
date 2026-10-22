@@ -7,13 +7,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.github import get_github_client
-from app.api.workflows import get_llm_adapter, get_repository_tool_registry
+from app.api.workflows import (
+    get_llm_adapter,
+    get_repository_tool_registry,
+    get_sandbox_service,
+)
 from app.config import Settings, get_settings
 from app.agents.issue_workflow import build_issue_workflow, initial_state
 from app.main import app
 from app.schemas.github import IssueData
 from app.schemas.workflow import WorkflowStatus, transition_status
 from app.services.github import GitHubClient, GitHubServiceError
+from app.schemas.sandbox import SandboxResult
 
 
 def issue() -> IssueData:
@@ -82,6 +87,20 @@ class FakeToolRegistry:
         )
 
 
+class FakeSandboxService:
+    def execute(self, repository_path, proposal):
+        return SandboxResult(
+            status="passed",
+            exit_code=0,
+            stdout="1 passed",
+            stderr="",
+            duration_ms=1,
+            timed_out=False,
+            test_summary="1 passed",
+            error=None,
+        )
+
+
 @pytest.mark.asyncio
 async def test_graph_success_preserves_shared_state_contract() -> None:
     state = initial_state(owner="octo", repo="repo", issue_number=42, workflow_id="wf-1")
@@ -121,6 +140,7 @@ def test_workflow_endpoint_returns_stable_success_shape(tmp_path) -> None:
     repository.mkdir(parents=True)
     (repository / "main.py").write_text("old\n", encoding="utf-8")
     app.dependency_overrides[get_settings] = lambda: Settings(repository_root=str(tmp_path))
+    app.dependency_overrides[get_sandbox_service] = lambda: FakeSandboxService()
     try:
         with TestClient(app) as client:
             response = client.post(
@@ -139,7 +159,7 @@ def test_workflow_endpoint_returns_stable_success_shape(tmp_path) -> None:
     assert payload["validation"]["valid"] is True
     assert payload["diff"]["additions"] == 1
     assert payload["diff"]["deletions"] == 1
-    assert payload["sandbox_result"] is None
+    assert payload["sandbox_result"]["status"] == "passed"
     assert payload["review"] is None
     assert payload["errors"] == []
 

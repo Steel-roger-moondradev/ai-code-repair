@@ -11,6 +11,7 @@ from app.schemas.workflow import WorkflowRequest, WorkflowResponse
 from app.services.github import GitHubClient
 from app.services.github import parse_issue_url
 from app.services.llm import GroqLLMAdapter
+from app.services.sandbox import SandboxService
 from app.tools.registry import ToolRegistry, build_repository_tool_registry
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
@@ -30,6 +31,12 @@ def get_repository_tool_registry(
     return build_repository_tool_registry(settings)
 
 
+def get_sandbox_service(settings: Settings = Depends(get_settings)) -> SandboxService:
+    """Create the disposable sandbox service at request time."""
+
+    return SandboxService(settings)
+
+
 @router.post("/issue-analysis", response_model=WorkflowResponse)
 async def issue_analysis(
     request: WorkflowRequest,
@@ -37,8 +44,9 @@ async def issue_analysis(
     llm: GroqLLMAdapter = Depends(get_llm_adapter),
     tool_registry: ToolRegistry = Depends(get_repository_tool_registry),
     settings: Settings = Depends(get_settings),
+    sandbox_service: SandboxService = Depends(get_sandbox_service),
 ) -> WorkflowResponse:
-    """Fetch and normalize a GitHub issue through the minimal workflow."""
+    """Analyze an issue, validate a patch, and test it in an isolated sandbox."""
 
     try:
         reference = parse_issue_url(request.issue_url)
@@ -57,6 +65,7 @@ async def issue_analysis(
         llm=llm,
         tool_registry=tool_registry,
         settings=settings,
+        sandbox_service=sandbox_service,
     )
     result = await graph.ainvoke(state)
     return WorkflowResponse(

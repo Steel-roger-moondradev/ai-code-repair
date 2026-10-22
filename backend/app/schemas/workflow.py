@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.github import IssueData
 from app.schemas.analysis import IssueAnalysis
 from app.schemas.patch import DiffResult, PatchProposal, PatchValidationResult
+from app.schemas.sandbox import SandboxResult
 
 
 class WorkflowStatus(StrEnum):
@@ -27,7 +28,9 @@ class WorkflowStatus(StrEnum):
 _ALLOWED_TRANSITIONS: dict[WorkflowStatus, frozenset[WorkflowStatus]] = {
     WorkflowStatus.QUEUED: frozenset({WorkflowStatus.RUNNING, WorkflowStatus.FAILED}),
     WorkflowStatus.RUNNING: frozenset({WorkflowStatus.PATCH_READY, WorkflowStatus.FAILED}),
-    WorkflowStatus.PATCH_READY: frozenset({WorkflowStatus.TESTING, WorkflowStatus.NEEDS_HUMAN_REVIEW}),
+    WorkflowStatus.PATCH_READY: frozenset(
+        {WorkflowStatus.TESTING, WorkflowStatus.NEEDS_HUMAN_REVIEW, WorkflowStatus.FAILED}
+    ),
     WorkflowStatus.TESTING: frozenset({WorkflowStatus.PATCH_READY, WorkflowStatus.FAILED}),
     WorkflowStatus.NEEDS_HUMAN_REVIEW: frozenset({WorkflowStatus.APPROVED, WorkflowStatus.REJECTED}),
     WorkflowStatus.APPROVED: frozenset({WorkflowStatus.PR_CREATED}),
@@ -66,6 +69,6 @@ class WorkflowResponse(BaseModel):
     proposal: PatchProposal | None = None
     validation: PatchValidationResult | None = None
     diff: DiffResult | None = None
-    sandbox_result: dict[str, Any] | None = None
+    sandbox_result: SandboxResult | None = None
     review: dict[str, Any] | None = None
     errors: list[str] = Field(default_factory=list)

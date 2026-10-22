@@ -18,6 +18,7 @@ from app.agents.issue_analyst import LLMAdapter
 from app.tools.registry import ToolRegistry
 from app.tools.diff_generator import generate_diff
 from app.tools.patch_validator import validate_patch
+from app.services.sandbox import SandboxService
 
 
 async def fetch_issue_node(
@@ -53,6 +54,7 @@ def build_issue_workflow(
     llm: LLMAdapter | None = None,
     tool_registry: ToolRegistry | None = None,
     settings: Settings | None = None,
+    sandbox_service: SandboxService | None = None,
 ):
     """Compile the issue graph without performing any network calls."""
 
@@ -125,13 +127,59 @@ def build_issue_workflow(
         graph.add_node("issue_analyst", analyze_node)
         graph.add_node("repository_explorer", explore_node)
         graph.add_node("patch_node", patch_proposal_node)
+
+        async def sandbox_node(state: PatchPilotState) -> PatchPilotState:
+            if state.get("validation") is None or not state["validation"].valid:
+                return {
+                    "status": transition_status(
+                        state.get("status", WorkflowStatus.RUNNING),
+                        WorkflowStatus.FAILED,
+                    ),
+                    "errors": ["sandbox rejected: patch validation did not succeed"],
+                }
+            if state.get("diff") is None or sandbox_service is None:
+                return {
+                    "status": transition_status(
+                        state.get("status", WorkflowStatus.RUNNING),
+                        WorkflowStatus.FAILED,
+                    ),
+                    "errors": ["sandbox unavailable: no sandbox service configured"],
+                }
+            effective_settings = settings
+            if effective_settings is None:
+                from app.config import get_settings
+
+                effective_settings = get_settings()
+            result = sandbox_service.execute(
+                Path(effective_settings.repository_root)
+                / state["owner"]
+                / state["repo"],
+                state["proposal"],
+            )
+            if result.status != "passed":
+                return {
+                    "sandbox_result": result,
+                    "status": transition_status(
+                        state.get("status", WorkflowStatus.PATCH_READY),
+                        WorkflowStatus.FAILED,
+                    ),
+                    "errors": [result.error or "sandbox execution failed"],
+                }
+            return {"sandbox_result": result}
+
         graph.add_node("validate_and_diff", validate_and_diff_node)
+        if sandbox_service is not None:
+            graph.add_node("sandbox", sandbox_node)
         graph.add_edge(START, "fetch_issue")
         graph.add_edge("fetch_issue", "issue_analyst")
         graph.add_edge("issue_analyst", "repository_explorer")
         graph.add_edge("repository_explorer", "patch_node")
         graph.add_edge("patch_node", "validate_and_diff")
-        graph.add_edge("validate_and_diff", END)
+        if sandbox_service is not None:
+            graph.add_edge("validate_and_diff", "sandbox")
+            graph.add_edge("sandbox", END)
+        else:
+            graph.add_edge("validate_and_diff", END)
     return graph.compile()
 
 

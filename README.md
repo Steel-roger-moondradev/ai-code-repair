@@ -1,8 +1,9 @@
 # PatchPilot
 
-PatchPilot is a Python 3.12 backend foundation for a bounded, reviewable
-software-repair workflow. Day 1 provides configuration, a FastAPI application,
-and health checks only. Later workflow features are intentionally not included.
+PatchPilot is a Python 3.12 backend for a bounded, reviewable software-repair
+workflow. The current implementation analyzes GitHub issues, proposes and
+validates Python patches, generates deterministic diffs, and executes fixed
+pytest commands in disposable Docker workspaces.
 
 ## Prerequisites
 
@@ -41,5 +42,16 @@ $env:PYTHONPATH = "backend"
 python -m pytest backend/tests -v
 ```
 
-The Day 1 tests are offline and do not call GitHub, Groq, Docker, or create a
-database.
+The automated tests are offline and use fakes for GitHub, Groq, Docker, and
+repository operations.
+
+## Sandbox image
+
+Build the restricted test image from the repository root:
+
+```powershell
+docker build -f backend/sandbox/Dockerfile -t patchpilot-sandbox:latest .
+```
+
+The application never falls back to host test execution when Docker is
+unavailable; it returns an explicit infrastructure error instead.
