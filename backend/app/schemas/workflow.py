@@ -6,6 +6,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.github import IssueData
+from app.schemas.analysis import IssueAnalysis
+from app.schemas.patch import DiffResult, PatchProposal, PatchValidationResult
 
 
 class WorkflowStatus(StrEnum):
@@ -24,7 +26,7 @@ class WorkflowStatus(StrEnum):
 
 _ALLOWED_TRANSITIONS: dict[WorkflowStatus, frozenset[WorkflowStatus]] = {
     WorkflowStatus.QUEUED: frozenset({WorkflowStatus.RUNNING, WorkflowStatus.FAILED}),
-    WorkflowStatus.RUNNING: frozenset({WorkflowStatus.FAILED}),
+    WorkflowStatus.RUNNING: frozenset({WorkflowStatus.PATCH_READY, WorkflowStatus.FAILED}),
     WorkflowStatus.PATCH_READY: frozenset({WorkflowStatus.TESTING, WorkflowStatus.NEEDS_HUMAN_REVIEW}),
     WorkflowStatus.TESTING: frozenset({WorkflowStatus.PATCH_READY, WorkflowStatus.FAILED}),
     WorkflowStatus.NEEDS_HUMAN_REVIEW: frozenset({WorkflowStatus.APPROVED, WorkflowStatus.REJECTED}),
@@ -59,11 +61,11 @@ class WorkflowResponse(BaseModel):
     workflow_id: str
     status: WorkflowStatus
     issue: IssueData | None = None
-    analysis: dict[str, Any] | None = None
+    analysis: IssueAnalysis | None = None
     relevant_files: list[dict[str, Any]] = Field(default_factory=list)
-    proposal: dict[str, Any] | None = None
-    validation: dict[str, Any] | None = None
-    diff: dict[str, Any] | None = None
+    proposal: PatchProposal | None = None
+    validation: PatchValidationResult | None = None
+    diff: DiffResult | None = None
     sandbox_result: dict[str, Any] | None = None
     review: dict[str, Any] | None = None
     errors: list[str] = Field(default_factory=list)

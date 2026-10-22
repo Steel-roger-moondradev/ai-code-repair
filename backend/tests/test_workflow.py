@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.github import get_github_client
 from app.api.workflows import get_llm_adapter, get_repository_tool_registry
+from app.config import Settings, get_settings
 from app.agents.issue_workflow import build_issue_workflow, initial_state
 from app.main import app
 from app.schemas.github import IssueData
@@ -40,9 +41,20 @@ class FailingGitHubClient:
 
 
 class FakeLLM:
+    def __init__(self):
+        self.calls = 0
+
     async def complete(self, **kwargs):
         from app.services.llm import LLMResponse
 
+        self.calls += 1
+        if self.calls > 1:
+            return LLMResponse(
+                text='{"summary":"Fix","assumptions":[],"risks":[],"tests_to_add":[],"changes":['
+                '{"path":"main.py","operation":"modify","rationale":"Fix","original_content":"old\\n",'
+                '"updated_content":"new\\n"}]}',
+                usage={},
+            )
         return LLMResponse(
             text='{"summary":"Fix it","problem_type":"bug","expected_behavior":"Work",'
             '"acceptance_criteria":["Works"],"constraints":[],"keywords":["Fix"],'
@@ -56,8 +68,18 @@ class FakeToolRegistry:
         from app.tools.registry import ToolResult
 
         if name == "get_repository_tree":
-            return ToolResult(ok=True, result=[])
-        return ToolResult(ok=True, result=[])
+            return ToolResult(ok=True, result=["main.py"])
+        if name == "search_repository_code":
+            return ToolResult(ok=True, result=[{"path": "main.py", "line": 1, "content": "parse"}])
+        return ToolResult(
+            ok=True,
+            result={
+                "path": "main.py",
+                "start_line": 1,
+                "end_line": 1,
+                "content": "old\n",
+            },
+        )
 
 
 @pytest.mark.asyncio
@@ -88,13 +110,17 @@ def test_status_transitions_are_validated_in_one_place() -> None:
         transition_status(WorkflowStatus.FAILED, WorkflowStatus.RUNNING)
 
 
-def test_workflow_endpoint_returns_stable_success_shape() -> None:
+def test_workflow_endpoint_returns_stable_success_shape(tmp_path) -> None:
     async def fake_client() -> AsyncIterator[GitHubClient]:
         yield FakeGitHubClient()
 
     app.dependency_overrides[get_github_client] = fake_client
     app.dependency_overrides[get_llm_adapter] = lambda: FakeLLM()
     app.dependency_overrides[get_repository_tool_registry] = lambda: FakeToolRegistry()
+    repository = tmp_path / "octo" / "repo"
+    repository.mkdir(parents=True)
+    (repository / "main.py").write_text("old\n", encoding="utf-8")
+    app.dependency_overrides[get_settings] = lambda: Settings(repository_root=str(tmp_path))
     try:
         with TestClient(app) as client:
             response = client.post(
@@ -106,12 +132,13 @@ def test_workflow_endpoint_returns_stable_success_shape() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "running"
+    assert payload["status"] == "patch_ready"
     assert payload["issue"]["title"] == "Fix it"
-    assert payload["analysis"] is None
-    assert payload["proposal"] is None
-    assert payload["validation"] is None
-    assert payload["diff"] is None
+    assert payload["analysis"]["summary"] == "Fix it"
+    assert payload["proposal"]["summary"] == "Fix"
+    assert payload["validation"]["valid"] is True
+    assert payload["diff"]["additions"] == 1
+    assert payload["diff"]["deletions"] == 1
     assert payload["sandbox_result"] is None
     assert payload["review"] is None
     assert payload["errors"] == []

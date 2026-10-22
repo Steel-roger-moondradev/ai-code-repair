@@ -36,6 +36,7 @@ async def issue_analysis(
     github_client: GitHubClient = Depends(get_github_client),
     llm: GroqLLMAdapter = Depends(get_llm_adapter),
     tool_registry: ToolRegistry = Depends(get_repository_tool_registry),
+    settings: Settings = Depends(get_settings),
 ) -> WorkflowResponse:
     """Fetch and normalize a GitHub issue through the minimal workflow."""
 
@@ -55,11 +56,19 @@ async def issue_analysis(
         github_client,
         llm=llm,
         tool_registry=tool_registry,
+        settings=settings,
     )
     result = await graph.ainvoke(state)
     return WorkflowResponse(
         workflow_id=workflow_id,
         status=result["status"],
         issue=result.get("issue"),
+        analysis=result.get("analysis"),
+        relevant_files=result.get("relevant_files", []),
+        proposal=result.get("proposal"),
+        validation=result.get("validation"),
+        diff=result.get("diff"),
+        sandbox_result=result.get("sandbox_result"),
+        review=result.get("review"),
         errors=result.get("errors", []),
     )

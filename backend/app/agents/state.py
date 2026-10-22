@@ -4,6 +4,7 @@ from typing import TypedDict
 
 from app.schemas.analysis import IssueAnalysis
 from app.schemas.github import IssueData
+from app.schemas.patch import DiffResult, PatchProposal, PatchValidationResult
 from app.schemas.workflow import WorkflowStatus
 
 
@@ -18,9 +19,9 @@ class PatchPilotState(TypedDict, total=False):
     repository_tree: list[str]
     search_results: list[dict]
     relevant_files: list[dict]
-    proposal: dict | None
-    validation: dict | None
-    diff: dict | None
+    proposal: PatchProposal | None
+    validation: PatchValidationResult | None
+    diff: DiffResult | None
     sandbox_result: dict | None
     review: dict | None
     workflow_id: str

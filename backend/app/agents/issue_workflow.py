@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.state import PatchPilotState
 from app.agents.issue_analyst import issue_analyst_node
 from app.agents.repository_explorer import repository_explorer_node
+from app.agents.patch_node import patch_node
 from app.config import Settings
+from app.schemas.patch import PatchProposal
 from app.schemas.workflow import WorkflowStatus, transition_status
 from app.services.github import GitHubClient, GitHubServiceError
 from app.agents.issue_analyst import LLMAdapter
 from app.tools.registry import ToolRegistry
+from app.tools.diff_generator import generate_diff
+from app.tools.patch_validator import validate_patch
 
 
 async def fetch_issue_node(
@@ -70,12 +76,62 @@ def build_issue_workflow(
                 settings=settings,
             )
 
+        async def patch_proposal_node(state: PatchPilotState) -> PatchPilotState:
+            return await patch_node(state, llm)
+
+        async def validate_and_diff_node(state: PatchPilotState) -> PatchPilotState:
+            proposal = state.get("proposal")
+            if not isinstance(proposal, PatchProposal):
+                return {
+                    "status": transition_status(
+                        state.get("status", WorkflowStatus.RUNNING),
+                        WorkflowStatus.FAILED,
+                    ),
+                    "errors": ["missing_proposal: validator requires a patch proposal"],
+                }
+            effective_settings = settings
+            if effective_settings is None:
+                from app.config import get_settings
+
+                effective_settings = get_settings()
+            repository_path = (
+                Path(effective_settings.repository_root)
+                / state["owner"]
+                / state["repo"]
+            )
+            validation = validate_patch(
+                repository_path,
+                proposal,
+                settings=effective_settings,
+            )
+            if not validation.valid:
+                return {
+                    "validation": validation,
+                    "status": transition_status(
+                        state.get("status", WorkflowStatus.RUNNING),
+                        WorkflowStatus.FAILED,
+                    ),
+                    "errors": validation.errors,
+                }
+            return {
+                "validation": validation,
+                "diff": generate_diff(repository_path, proposal),
+                "status": transition_status(
+                    state.get("status", WorkflowStatus.RUNNING),
+                    WorkflowStatus.PATCH_READY,
+                ),
+            }
+
         graph.add_node("issue_analyst", analyze_node)
         graph.add_node("repository_explorer", explore_node)
+        graph.add_node("patch_node", patch_proposal_node)
+        graph.add_node("validate_and_diff", validate_and_diff_node)
         graph.add_edge(START, "fetch_issue")
         graph.add_edge("fetch_issue", "issue_analyst")
         graph.add_edge("issue_analyst", "repository_explorer")
-        graph.add_edge("repository_explorer", END)
+        graph.add_edge("repository_explorer", "patch_node")
+        graph.add_edge("patch_node", "validate_and_diff")
+        graph.add_edge("validate_and_diff", END)
     return graph.compile()
 
 
