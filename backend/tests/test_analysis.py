@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.agents.issue_analyst import issue_analyst_node
+from app.agents.patch_node import _parse_proposal
 from app.agents.repository_explorer import repository_explorer_node
 from app.agents.issue_workflow import initial_state
 from app.config import Settings
@@ -51,6 +52,29 @@ def analysis_json() -> str:
         '"constraints":["Keep compatibility"],"keywords":["parser","parse"],'
         '"confidence":0.8,"needs_clarification":false}'
     )
+
+
+def test_legacy_patch_response_is_normalized_to_canonical_proposal() -> None:
+    source = "def divide(a, b):\n    return a * b\n"
+    proposal = _parse_proposal(
+        '{"patches":[{"path":"src/calculator.py","diff":"@@ -1,2 +1,2 @@\\n '
+        'def divide(a, b):\\n-    return a * b\\n+    return a / b\\n"}]}',
+        [{"path": "src/calculator.py", "content": source}],
+    )
+
+    assert proposal.changes[0].original_content == source
+    assert proposal.changes[0].updated_content == "def divide(a, b):\n    return a / b\n"
+
+
+def test_canonical_proposal_uses_trusted_source_evidence_for_original_content() -> None:
+    proposal = _parse_proposal(
+        '{"summary":"Fix","assumptions":[],"risks":[],"tests_to_add":[],"changes":['
+        '{"path":"src/calculator.py","operation":"modify","rationale":"Fix",'
+        '"original_content":"normalized","updated_content":"return a / b\\n"}]}',
+        [{"path": "src/calculator.py", "content": "return a * b\r\n"}],
+    )
+
+    assert proposal.changes[0].original_content == "return a * b\r\n"
 
 
 @pytest.mark.asyncio

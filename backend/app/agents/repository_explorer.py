@@ -27,7 +27,7 @@ async def repository_explorer_node(
     if analysis is None:
         return _failure(state, "missing_analysis: analysis must be produced first")
 
-    repository_path = Path(settings.repository_root) / state["owner"] / state["repo"]
+    repository_path = Path(state["owner"]) / state["repo"]
     tree_result = tool_registry.execute(
         "get_repository_tree",
         {"repository_path": repository_path},
@@ -97,10 +97,12 @@ def _rank_paths(results: list[dict[str, Any]], keywords: list[str]) -> list[str]
 
 
 def _failure(state: PatchPilotState, error: str) -> PatchPilotState:
+    current_status = state.get("status", WorkflowStatus.RUNNING)
     return {
-        "status": transition_status(
-            state.get("status", WorkflowStatus.RUNNING),
-            WorkflowStatus.FAILED,
+        "status": (
+            current_status
+            if current_status == WorkflowStatus.FAILED
+            else transition_status(current_status, WorkflowStatus.FAILED)
         ),
         "errors": [error],
     }

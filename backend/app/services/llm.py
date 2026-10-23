@@ -66,6 +66,7 @@ class GroqLLMAdapter:
             ],
             "temperature": 0,
             "max_tokens": max_output_tokens,
+            "response_format": {"type": "json_object"},
         }
         for attempt in range(self.max_retries + 1):
             try:

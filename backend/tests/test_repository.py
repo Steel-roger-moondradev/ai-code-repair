@@ -152,6 +152,16 @@ def test_read_supports_bounded_line_ranges_and_missing_files(tmp_path: Path) -> 
         service.read_repository_file(root, "main.py", start_line=3, end_line=2)
 
 
+def test_read_full_file_preserves_terminal_newline(tmp_path: Path) -> None:
+    service, root = create_repository(tmp_path)
+    content = "one\ntwo\n"
+    (root / "main.py").write_text(content, encoding="utf-8")
+
+    result = service.read_repository_file(root, "main.py")
+
+    assert result["content"] == content
+
+
 def test_read_rejects_symlink_escape_and_operations_do_not_change_root(tmp_path: Path) -> None:
     service, root = create_repository(tmp_path)
     target = root / "main.py"

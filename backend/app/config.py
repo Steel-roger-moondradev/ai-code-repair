@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     max_patch_bytes: int = Field(default=200000, gt=0)
     sandbox_timeout_seconds: int = Field(default=120, gt=0)
     max_request_body_bytes: int = Field(default=65536, gt=0)
+    cors_allowed_origins: str = ""
 
     @field_validator("app_env", "repository_root", "workspace_root", "database_url")
     @classmethod

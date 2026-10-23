@@ -111,6 +111,17 @@ async def test_invalid_reviewer_output_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_legacy_reviewer_output_is_normalized() -> None:
+    legacy = '{"verdict":"approved","concerns":[],"notes":["looks good"]}'
+
+    result = await reviewer_node(review_state(), FakeLLM(legacy))
+
+    assert result["review"].verdict == "approved"
+    assert result["review"].maintainability_notes == ["looks good"]
+    assert result["review"].summary == "looks good"
+
+
+@pytest.mark.asyncio
 async def test_human_review_and_rejection_are_terminal_statuses() -> None:
     human = await reviewer_node(review_state(), FakeLLM(payload("needs_human_review")))
     rejected = await reviewer_node(review_state(), FakeLLM(payload("rejected")))

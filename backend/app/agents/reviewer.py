@@ -78,7 +78,7 @@ async def reviewer_node(
             user_prompt=f"Review this bounded PatchPilot evidence:\n{evidence}",
             max_output_tokens=max_output_tokens,
         )
-        review = ReviewerResult.model_validate_json(response.text)
+        review = _parse_review(response.text)
     except (LLMConfigurationError, LLMProviderError, ValidationError, ValueError) as exc:
         return _failure(state, f"review_failed: {exc}")
 
@@ -88,6 +88,37 @@ async def reviewer_node(
         "review": review,
         "status": _status_for_review(state, review),
     }
+
+
+def _parse_review(text: str) -> ReviewerResult:
+    """Normalize the one known legacy provider shape into the canonical contract."""
+
+    try:
+        return ReviewerResult.model_validate_json(text)
+    except ValidationError as canonical_error:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            raise canonical_error
+        if not isinstance(payload, dict) or not {"concerns", "notes"} <= payload.keys():
+            raise canonical_error
+        concerns = payload["concerns"]
+        notes = payload["notes"]
+        if not isinstance(concerns, list) or not all(
+            isinstance(item, str) for item in concerns
+        ):
+            raise canonical_error
+        if not isinstance(notes, list) or not all(isinstance(item, str) for item in notes):
+            raise canonical_error
+        return ReviewerResult(
+            verdict=payload.get("verdict"),
+            correctness_concerns=concerns,
+            security_concerns=[],
+            maintainability_notes=notes,
+            test_coverage_notes=[],
+            evidence=[],
+            summary=" ".join(notes) if notes else "Review completed.",
+        )
 
 
 def _status_for_review(

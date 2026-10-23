@@ -9,7 +9,7 @@ router = APIRouter()
 @router.get("/health")
 def health() -> dict[str, str]:
     """Report whether the API process is available."""
-
+    
     return {"status": "ok"}
 
 

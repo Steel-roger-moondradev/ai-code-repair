@@ -164,7 +164,6 @@ class SandboxService:
             "--workdir",
             "/workspace",
             SANDBOX_IMAGE,
-            "python",
             "-m",
             "pytest",
             "-q",
@@ -183,11 +182,18 @@ class SandboxService:
                 if Path(current, name).is_symlink():
                     raise ValueError("source repository contains a symlink")
         for item in source.iterdir():
+            if item.name == ".git":
+                continue
             destination = workspace / item.name
             if item.is_symlink():
                 raise ValueError("source repository contains a symlink")
             if item.is_dir():
-                shutil.copytree(item, destination, symlinks=False)
+                shutil.copytree(
+                    item,
+                    destination,
+                    symlinks=False,
+                    ignore=shutil.ignore_patterns(".git"),
+                )
             else:
                 shutil.copy2(item, destination)
 

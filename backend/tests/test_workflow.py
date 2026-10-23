@@ -178,6 +178,87 @@ def test_status_transitions_are_validated_in_one_place() -> None:
         transition_status(WorkflowStatus.FAILED, WorkflowStatus.RUNNING)
 
 
+@pytest.mark.asyncio
+async def test_missing_repository_returns_typed_failure() -> None:
+    from app.agents.repository_explorer import repository_explorer_node
+    from app.schemas.analysis import IssueAnalysis
+    from app.tools.registry import ToolRegistry
+
+    analysis = IssueAnalysis(
+        summary="Find the bug",
+        problem_type="bug",
+        expected_behavior="Correct behavior",
+        acceptance_criteria=[],
+        constraints=[],
+        keywords=["divide"],
+        confidence=0.9,
+        needs_clarification=False,
+    )
+    result = await repository_explorer_node(
+        {
+            "owner": "Steel-roger-moondradev",
+            "repo": "patchpilot-demo-target",
+            "analysis": analysis,
+            "status": WorkflowStatus.RUNNING,
+        },
+        tool_registry=ToolRegistry(),
+        settings=Settings(repository_root="data/missing-day-demo-repository"),
+    )
+
+    assert result["status"] == WorkflowStatus.FAILED
+    assert result["errors"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_failure_does_not_repeat_terminal_transition(tmp_path) -> None:
+    from app.schemas.patch import PatchValidationResult, DiffResult
+    from app.schemas.sandbox import SandboxResult
+
+    class FailedSandbox:
+        def execute(self, repository_path, proposal):
+            return SandboxResult(
+                status="failed",
+                exit_code=1,
+                stdout="",
+                stderr="",
+                duration_ms=1,
+                timed_out=False,
+                test_summary="failed",
+                error="sandbox failed",
+            )
+
+    graph = build_issue_workflow(
+        FakeGitHubClient(),
+        llm=FakeLLM(),
+        tool_registry=FakeToolRegistry(),
+        settings=Settings(repository_root=str(tmp_path)),
+        sandbox_service=FailedSandbox(),
+    )
+    state = initial_state(
+        owner="octo",
+        repo="repo",
+        issue_number=42,
+        workflow_id="wf-sandbox-failure",
+    )
+    state["status"] = WorkflowStatus.QUEUED
+    state["validation"] = PatchValidationResult(
+        valid=False,
+        errors=["invalid patch"],
+        validated_paths=[],
+        patch_hash=None,
+    )
+    state["diff"] = DiffResult(
+        patch_hash="a" * 64,
+        diff_text="",
+        changed_files=[],
+        additions=0,
+        deletions=0,
+    )
+    result = await graph.ainvoke(state)
+
+    assert result["status"] == WorkflowStatus.FAILED
+
+
 def test_workflow_endpoint_returns_stable_success_shape(tmp_path) -> None:
     async def fake_client() -> AsyncIterator[GitHubClient]:
         yield FakeGitHubClient()

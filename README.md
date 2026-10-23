@@ -5,10 +5,60 @@ workflow. The current implementation analyzes GitHub issues, proposes and
 validates Python patches, generates deterministic diffs, and executes fixed
 pytest commands in disposable Docker workspaces.
 
+This is a Python-only MVP. It does not claim cross-language support,
+production-grade security, high throughput, or verified live pull-request
+creation.
+
+## Architecture
+
+```text
+GitHub issue URL
+        |
+        v
+FastAPI request -> LangGraph PatchPilotState
+        |                  |
+        |                  +--> issue analysis -> repository retrieval
+        |                                         |
+        |                                         v
+        |                              typed patch -> validation -> diff
+        |                                                        |
+        |                                                        v
+        |                                      separate Docker sandbox
+        |                                                        |
+        |                                                        v
+        |                                      evidence reviewer -> approval
+        |                                                        |
+        +---------------- SQLite history/audit <----------------+
+                                                                 |
+                                                                 v
+                                                     idempotent GitHub PR
+```
+
+The shared state in `backend/app/agents/state.py` and the Pydantic schemas in
+`backend/app/schemas/` are the canonical output contracts. Nodes return
+typed, bounded results; persistence stores serialized artifacts and audit
+events.
+
+## Technology choices
+
+- FastAPI and Pydantic provide typed HTTP boundaries and validation.
+- LangGraph provides explicit node transitions and bounded repair routing.
+- HTTPX provides injectable, offline-testable GitHub access.
+- Exact retrieval is deterministic and repository-scoped; optional semantic
+  retrieval is isolated behind a provider interface.
+- SQLAlchemy and Alembic provide SQLite history and explicit migrations.
+- Docker is used as a separate, restricted test runner rather than executing
+  target code in the API process.
+
 ## Prerequisites
 
 - Python 3.12
 - PowerShell
+
+The API image is pinned to `python:3.12-slim`. The local verification
+environment for this workspace used Python 3.14.3 because Python 3.12 was not
+installed; the container build and smoke test use the documented Python 3.12
+runtime.
 
 ## Setup
 
@@ -63,6 +113,22 @@ History endpoints:
 - `GET /api/v1/workflows/{workflow_id}/results`
 - `POST /api/v1/workflows/{workflow_id}/approve`
 
+Create a workflow:
+
+```powershell
+$body = @{
+  issue_url = "https://github.com/octo/repo/issues/42"
+  idempotency_key = "demo-42"
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/workflows `
+  -ContentType "application/json" -Body $body
+```
+
+Poll the returned `workflow_id` with
+`GET /api/v1/workflows/{workflow_id}`. Approval requires the persisted patch
+hash from `GET /api/v1/workflows/{workflow_id}/proposal`; no PR is created
+without the explicit approval request.
+
 Approval requires the exact current `expected_patch_hash` from the persisted
 validated proposal. The server creates a workflow-derived branch and publishes
 only validated Python changes; it never writes directly to the default branch.
@@ -84,3 +150,36 @@ docker build -f backend/sandbox/Dockerfile -t patchpilot-sandbox:latest .
 
 The application never falls back to host test execution when Docker is
 unavailable; it returns an explicit infrastructure error instead.
+
+## Containerized API
+
+The root `Dockerfile` builds a minimal non-root API image. It excludes `.env`,
+repositories, workspaces, indexes, local databases, tests, and documentation
+from the image through `.dockerignore`. For local API development:
+
+```powershell
+Copy-Item .env.example .env
+docker compose build
+docker compose up
+```
+
+The Compose service persists only the application data volume and deliberately
+does not mount the host Docker socket. The sandbox remains a separate
+container launched through the configured runner; Docker-in-Docker and
+production socket access are not assumed to be safe or supported. If Docker
+execution is unavailable, workflow execution reports a sandbox infrastructure
+error rather than running target tests on the API host.
+
+Set `CORS_ALLOWED_ORIGINS` to a comma-separated allowlist of exact origins when
+browser access is required. It is empty by default, so cross-origin access is
+disabled. Configure secrets through the deployment environment or an ignored
+`.env` file, never in Compose YAML.
+
+## Verification and limitations
+
+The verified local baseline is documented in
+[`docs/evaluation.md`](docs/evaluation.md). Automated tests use offline fakes
+for external services. A controlled success demo and a safe-failure demo are
+documented in [`docs/demo.md`](docs/demo.md); live GitHub writes, hosted
+deployment, and provider capability are intentionally not claimed unless
+executed with controlled infrastructure.

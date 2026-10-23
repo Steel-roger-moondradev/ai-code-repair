@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db.models import AuditEvent, Base, WorkflowArtifact, WorkflowRun
 from app.schemas.workflow import WorkflowStatus, transition_status
+from app.services.observability import log_stage
 
 SECRET_KEY = re.compile(r"(token|secret|password|api[_-]?key|authorization)", re.I)
 ALLOWED_ARTIFACTS = {"proposal", "diff", "validation", "sandbox_result", "review", "pull_request"}
@@ -82,6 +83,7 @@ class PersistenceService:
                 )
         except SQLAlchemyError as exc:
             raise PersistenceError("workflow creation failed") from exc
+        log_stage(workflow_id=workflow_id, node="persistence", status="created")
         return self.get_run(workflow_id)
 
     def find_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
@@ -127,6 +129,12 @@ class PersistenceService:
             raise
         except (SQLAlchemyError, ValueError) as exc:
             raise PersistenceError("workflow status update failed") from exc
+        log_stage(
+            workflow_id=workflow_id,
+            node=stage,
+            status=target.value,
+            error_category=None,
+        )
         return self.get_run(workflow_id)
 
     def save_artifact(

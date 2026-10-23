@@ -19,6 +19,7 @@ from app.services.pull_requests import (
     PullRequestResult,
     PullRequestService,
 )
+from app.services.observability import log_stage
 from app.tools.registry import ToolRegistry, build_repository_tool_registry
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
@@ -134,6 +135,12 @@ async def issue_analysis(
         final_status,
         patch_hash=result.get("validation").patch_hash if result.get("validation") else None,
         stage="workflow_complete",
+    )
+    log_stage(
+        workflow_id=workflow_id,
+        node="workflow",
+        status=final_status.value,
+        error_category=(result.get("errors") or [None])[0],
     )
     for artifact_type in ("proposal", "validation", "diff", "sandbox_result", "review"):
         artifact = result.get(artifact_type)

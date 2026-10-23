@@ -1,6 +1,7 @@
 """Offline tests for exact-hash approval and PR publication."""
 
 import pytest
+import httpx
 
 from app.config import Settings
 from app.schemas.workflow import WorkflowStatus
@@ -9,6 +10,7 @@ from app.services.pull_requests import (
     ApprovalRequest,
     PullRequestResult,
     PullRequestService,
+    _safe_github_detail,
 )
 
 
@@ -127,3 +129,12 @@ def test_failed_sandbox_and_test_path_cannot_publish(tmp_path):
         PullRequestService(store, FakeWriter()).approve_and_publish(
             ApprovalRequest(workflow_id="wf-1", expected_patch_hash="a" * 64)
         )
+
+
+def test_github_forbidden_detail_is_safe_and_preserved() -> None:
+    response = httpx.Response(
+        403,
+        json={"message": "Resource not accessible by personal access token"},
+    )
+
+    assert _safe_github_detail(response) == "Resource not accessible by personal access token"

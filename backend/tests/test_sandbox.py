@@ -68,7 +68,7 @@ def test_passed_run_uses_fixed_restricted_command_and_cleans_workspace(tmp_path)
     assert runner.arguments[runner.arguments.index("--network") + 1] == "none"
     assert "docker.sock" not in " ".join(runner.arguments)
     assert "GROQ_API_KEY" not in " ".join(runner.arguments)
-    assert runner.arguments[-4:] == ["python", "-m", "pytest", "-q"]
+    assert runner.arguments[-3:] == ["-m", "pytest", "-q"]
 
 
 def test_failed_run_preserves_exit_code_and_output(tmp_path):

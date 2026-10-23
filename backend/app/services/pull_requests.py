@@ -86,19 +86,37 @@ class GitHubPullRequestWriter:
         sha = base.get("object", {}).get("sha")
         if not isinstance(sha, str):
             raise GitHubServiceError("invalid_upstream_response", "GitHub returned no base commit")
-        self._request(
-            "POST",
-            f"{repository}/git/refs",
-            json={"ref": f"refs/heads/{branch}", "sha": sha},
-        )
+        try:
+            self._request("GET", f"{repository}/git/ref/heads/{branch}")
+        except GitHubServiceError as exc:
+            if exc.category != "not_found":
+                raise
+            self._request(
+                "POST",
+                f"{repository}/git/refs",
+                json={"ref": f"refs/heads/{branch}", "sha": sha},
+            )
         for change in changes:
+            file_path = f"{repository}/contents/{change['path']}"
+            file_payload = self._request(
+                "GET",
+                file_path,
+                params={"ref": branch},
+            )
+            file_sha = file_payload.get("sha")
+            if not isinstance(file_sha, str):
+                raise GitHubServiceError(
+                    "invalid_upstream_response",
+                    f"GitHub returned no blob SHA for {change['path']}",
+                )
             self._request(
                 "PUT",
-                f"{repository}/contents/{change['path']}",
+                file_path,
                 json={
                     "message": title,
                     "content": base64.b64encode(change["content"].encode("utf-8")).decode("ascii"),
                     "branch": branch,
+                    "sha": file_sha,
                 },
             )
         response = self._request(
@@ -115,7 +133,7 @@ class GitHubPullRequestWriter:
     def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if self.settings.github_token:
-            headers["Authorization"] = f"Bearer {self.settings.github_token}"
+            headers["Authorization"] = "Bearer " + self.settings.github_token
         return headers
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -126,20 +144,45 @@ class GitHubPullRequestWriter:
         except httpx.HTTPError as exc:
             raise GitHubServiceError("upstream_unavailable", "GitHub request failed") from exc
         if response.status_code in (401, 403):
-            raise GitHubServiceError("forbidden", "GitHub write access was denied", response.status_code)
+            detail = _safe_github_detail(response)
+            raise GitHubServiceError(
+                "forbidden",
+                f"GitHub write access was denied: {detail}",
+                response.status_code,
+            )
         if response.status_code == 404:
             raise GitHubServiceError("not_found", "GitHub resource was not found", 404)
         if response.status_code >= 500:
             raise GitHubServiceError("upstream_server_error", "GitHub service failed", response.status_code)
         if response.status_code >= 400:
-            raise GitHubServiceError("upstream_error", "GitHub rejected the write", response.status_code)
+            detail = _safe_github_detail(response)
+            raise GitHubServiceError(
+                "upstream_error",
+                f"GitHub rejected the write: {detail}",
+                response.status_code,
+            )
         try:
             payload = response.json()
         except ValueError as exc:
             raise GitHubServiceError("invalid_upstream_response", "GitHub returned invalid JSON") from exc
         if not isinstance(payload, dict):
             raise GitHubServiceError("invalid_upstream_response", "GitHub returned an invalid response")
+        
         return payload
+
+
+def _safe_github_detail(response: httpx.Response) -> str:
+    """Return bounded, non-secret diagnostic text from a GitHub error response."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    if isinstance(payload, dict) and isinstance(payload.get("message"), str):
+        detail = payload["message"].strip()
+        if detail:
+            return detail[:300]
+    return f"HTTP {response.status_code}"
 
 
 @dataclass

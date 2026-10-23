@@ -98,7 +98,7 @@ def build_issue_workflow(
 
                 effective_settings = get_settings()
             repository_path = (
-                Path(effective_settings.repository_root)
+                Path(effective_settings.repository_root).expanduser().resolve()
                 / state["owner"]
                 / state["repo"]
             )
@@ -132,21 +132,26 @@ def build_issue_workflow(
         graph.add_node("repository_explorer", explore_node)
         graph.add_node("patch_node", patch_proposal_node)
 
+        def route_failed(state: PatchPilotState, next_node: str) -> str:
+            return END if state.get("status") == WorkflowStatus.FAILED else next_node
+
+        def failed_status(state: PatchPilotState) -> WorkflowStatus:
+            current = state.get("status", WorkflowStatus.RUNNING)
+            return (
+                current
+                if current == WorkflowStatus.FAILED
+                else transition_status(current, WorkflowStatus.FAILED)
+            )
+
         async def sandbox_node(state: PatchPilotState) -> PatchPilotState:
             if state.get("validation") is None or not state["validation"].valid:
                 return {
-                    "status": transition_status(
-                        state.get("status", WorkflowStatus.RUNNING),
-                        WorkflowStatus.FAILED,
-                    ),
+                    "status": failed_status(state),
                     "errors": ["sandbox rejected: patch validation did not succeed"],
                 }
             if state.get("diff") is None or sandbox_service is None:
                 return {
-                    "status": transition_status(
-                        state.get("status", WorkflowStatus.RUNNING),
-                        WorkflowStatus.FAILED,
-                    ),
+                    "status": failed_status(state),
                     "errors": ["sandbox unavailable: no sandbox service configured"],
                 }
             effective_settings = settings
@@ -155,7 +160,7 @@ def build_issue_workflow(
 
                 effective_settings = get_settings()
             result = sandbox_service.execute(
-                Path(effective_settings.repository_root)
+                Path(effective_settings.repository_root).expanduser().resolve()
                 / state["owner"]
                 / state["repo"],
                 state["proposal"],
@@ -163,10 +168,7 @@ def build_issue_workflow(
             if result.status != "passed":
                 return {
                     "sandbox_result": result,
-                    "status": transition_status(
-                        state.get("status", WorkflowStatus.PATCH_READY),
-                        WorkflowStatus.FAILED,
-                    ),
+                    "status": failed_status(state),
                     "errors": [result.error or "sandbox execution failed"],
                 }
             return {"sandbox_result": result}
@@ -210,10 +212,26 @@ def build_issue_workflow(
                 )
             })
         graph.add_edge(START, "fetch_issue")
-        graph.add_edge("fetch_issue", "issue_analyst")
-        graph.add_edge("issue_analyst", "repository_explorer")
-        graph.add_edge("repository_explorer", "patch_node")
-        graph.add_edge("patch_node", "validate_and_diff")
+        graph.add_conditional_edges(
+            "fetch_issue",
+            lambda state: route_failed(state, "issue_analyst"),
+            {"issue_analyst": "issue_analyst", END: END},
+        )
+        graph.add_conditional_edges(
+            "issue_analyst",
+            lambda state: route_failed(state, "repository_explorer"),
+            {"repository_explorer": "repository_explorer", END: END},
+        )
+        graph.add_conditional_edges(
+            "repository_explorer",
+            lambda state: route_failed(state, "patch_node"),
+            {"patch_node": "patch_node", END: END},
+        )
+        graph.add_conditional_edges(
+            "patch_node",
+            lambda state: route_failed(state, "validate_and_diff"),
+            {"validate_and_diff": "validate_and_diff", END: END},
+        )
         if sandbox_service is not None:
             graph.add_edge("validate_and_diff", "sandbox")
             graph.add_conditional_edges("sandbox", route_sandbox, {

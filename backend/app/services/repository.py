@@ -198,6 +198,13 @@ class RepositoryService:
         content = self._read_text(file_path, allow_missing=False)
         if content is None:
             raise RepositoryServiceError("file_unreadable", "repository file could not be read")
+        if start_line is None and end_line is None:
+            return {
+                "path": self._relative_path(root, file_path),
+                "start_line": 1,
+                "end_line": len(content.splitlines()),
+                "content": content,
+            }
         lines = content.splitlines()
         first = (start_line or 1) - 1
         last = end_line or len(lines)
@@ -242,7 +249,7 @@ class RepositoryService:
             raw = file_path.read_bytes()
             if b"\x00" in raw:
                 return None
-            return raw.decode("utf-8")
+            return raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         except (OSError, UnicodeDecodeError) as exc:
             if allow_missing:
                 return None
