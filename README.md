@@ -9,6 +9,46 @@ This is a Python-only MVP. It does not claim cross-language support,
 production-grade security, high throughput, or verified live pull-request
 creation.
 
+## MVP scope: what files it supports
+
+PatchPilot is designed for small, reviewable changes in Python repositories.
+The supported success path is:
+
+- An HTTPS GitHub **issue** URL.
+- A checked-out Python repository under `data/repositories/<owner>/<repo>`.
+- Existing `.py` source files, normally with a small `pytest` suite.
+- A patch that creates or modifies up to the configured number of Python files.
+- A fixed, offline Docker test command: `python -m pytest -q`.
+- Human approval before a branch, commit, and pull request are published.
+
+The patch security boundary intentionally allows only `.py` paths. It rejects
+absolute paths, traversal, symlinks, duplicate paths, test files, test
+directories, and project configuration files such as `pyproject.toml`,
+`setup.py`, and `conftest.py`. This makes the MVP appropriate for isolated
+implementation bugs such as the calculator demo, not arbitrary repository
+maintenance.
+
+### Files and projects that are outside the MVP contract
+
+The current release does **not** reliably support:
+
+- JavaScript, TypeScript, Java, Go, Rust, or other non-Python source changes.
+- `.env`, `.env.example`, YAML, TOML, JSON, Markdown, Dockerfile, or CI edits.
+- Issues requiring dependency installation, migrations, database changes, or
+  frontend builds.
+- Projects without a reproducible `pytest` command.
+- Tests that need network access, cloud credentials, paid APIs, or services
+  outside the sandbox.
+- Secret rotation. PatchPilot can remove a secret from source, but revoking
+  and replacing the external credential must be done by an operator.
+- Large refactors, broad multi-module redesigns, binary files, generated
+  artifacts, or changes to protected tests/configuration.
+
+For a broader issue, PatchPilot should fail closed or request human review;
+do not weaken the validator to make an unsupported issue pass. See the full
+scope and interview guide in
+[`docs/project-guide.md`](docs/project-guide.md).
+
 ## Architecture
 
 ```text
@@ -75,6 +115,24 @@ Copy-Item .env.example .env
 
 The application does not require GitHub or Groq credentials to start. Keep
 `.env` local and never commit secrets.
+
+## Frontend console
+
+The React/Vite console lives in `frontend/`. It is a mission-control view of
+the same workflow: launch an issue analysis, watch the evidence stages, inspect
+the deterministic diff, and approve a passing patch before PR publication.
+
+Run the API first, then start the frontend from a second terminal:
+
+```powershell
+Set-Location frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. Vite proxies `/api` and `/health` to the local
+FastAPI server on port 8000. For a deployed frontend, configure the API origin
+and allow that origin through `CORS_ALLOWED_ORIGINS`.
 
 ## Run
 
